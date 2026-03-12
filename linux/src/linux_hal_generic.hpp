@@ -54,13 +54,18 @@ typedef struct LinuxTimestamperIGBPrivate * LinuxTimestamperIGBPrivate_t;
  */
 class LinuxTimestamperGeneric : public LinuxTimestamper {
 private:
+	struct RxTimestampRecord {
+		PTPMessageId messageId;
+		Timestamp timestamp;
+	};
+
 	int sd;
 	int phc_fd;
 	Timestamp crstamp_system;
 	Timestamp crstamp_device;
 	LinuxTimestamperGenericPrivate_t _private;
 	bool cross_stamp_good;
-	std::list<Timestamp> rxTimestampList;
+	std::list<RxTimestampRecord> rxTimestampList;
 	LinuxNetworkInterfaceList iface_list;
 #ifdef PTP_HW_CROSSTSTAMP
 	bool precise_timestamp_enabled;
@@ -114,9 +119,16 @@ public:
 	 * @param tstamp [in] RX timestamp
 	 * @return void
 	 */
-	void pushRXTimestamp( Timestamp *tstamp ) {
+	void pushRXTimestamp( PTPMessageId messageId, Timestamp *tstamp ) {
+		RxTimestampRecord record;
 		tstamp->_version = version;
-		rxTimestampList.push_front(*tstamp);
+		record.messageId = messageId;
+		record.timestamp = *tstamp;
+		rxTimestampList.push_front(record);
+	}
+
+	size_t getQueuedRxTimestampCount() const {
+		return rxTimestampList.size();
 	}
 
 	/**
@@ -166,12 +178,35 @@ public:
 	virtual int HWTimestamper_rxtimestamp
 	( PortIdentity *identity, PTPMessageId messageId, Timestamp &timestamp,
 	  unsigned &clock_value, bool last ) {
-		/* This shouldn't happen. Ever. */
-		if( rxTimestampList.empty() ) return GPTP_EC_EAGAIN;
-		timestamp = rxTimestampList.back();
-		rxTimestampList.pop_back();
+		static unsigned int logged_rx_pop_debug = 0;
+		std::list<RxTimestampRecord>::iterator it;
+		for( it = rxTimestampList.begin(); it != rxTimestampList.end(); ++it ) {
+			if( it->messageId == messageId ) {
+				if( logged_rx_pop_debug < 40 ) {
+					GPTP_LOG_WARNING(
+						"Pop RX timestamp: requested msgType=%u seq=%u queue_before=%zu matched msgType=%u seq=%u ts=%hu,%u,%u",
+						messageId.getMessageType(), messageId.getSequenceId(),
+						rxTimestampList.size(),
+						it->messageId.getMessageType(), it->messageId.getSequenceId(),
+						it->timestamp.seconds_ms, it->timestamp.seconds_ls,
+						it->timestamp.nanoseconds);
+					++logged_rx_pop_debug;
+				}
+				timestamp = it->timestamp;
+				rxTimestampList.erase(it);
+				return GPTP_EC_SUCCESS;
+			}
+		}
 
-		return GPTP_EC_SUCCESS;
+		if( logged_rx_pop_debug < 40 ) {
+			GPTP_LOG_WARNING(
+				"Pop RX timestamp: requested msgType=%u seq=%u queue=%zu result=EAGAIN",
+				messageId.getMessageType(), messageId.getSequenceId(),
+				rxTimestampList.size());
+			++logged_rx_pop_debug;
+		}
+
+		return GPTP_EC_EAGAIN;
 	}
 
 	/**

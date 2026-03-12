@@ -52,6 +52,16 @@ uint32_t findSpeedByName( const char *name, const char **end );
 
 GptpIniParser::GptpIniParser(std::string filename)
 {
+    _config.priority1 = 248;
+    _config.priority2 = 248;
+    _config.announceReceiptTimeout = CommonPort::DEFAULT_ANNOUNCE_RECEIPT_TIMEOUT;
+    _config.syncReceiptTimeout = CommonPort::DEFAULT_SYNC_RECEIPT_TIMEOUT;
+    _config.syncReceiptThresh = CommonPort::DEFAULT_SYNC_RECEIPT_THRESH;
+    _config.neighborPropDelayThresh = CommonPort::NEIGHBOR_PROP_DELAY_THRESH;
+    _config.seqIdAsCapableThresh = 0;
+    _config.lostPdelayRespThresh = 0;
+    _config.port_state = PTP_INITIALIZING;
+    _config.allowNegativeCorrField = false;
     _error = ini_parse(filename.c_str(), iniCallBack, this);
 }
 
@@ -79,10 +89,20 @@ int GptpIniParser::iniCallBack(void *user, const char *section, const char *name
         {
             errno = 0;
             char *pEnd;
-            unsigned char p1 = (unsigned char) strtoul(value, &pEnd, 10);
-            if( *pEnd == '\0' && errno == 0) {
+            unsigned long p1 = strtoul(value, &pEnd, 10);
+            if( *pEnd == '\0' && errno == 0 && p1 <= UCHAR_MAX) {
                 valOK = true;
-                parser->_config.priority1 = p1;
+                parser->_config.priority1 = (unsigned char)p1;
+            }
+        }
+        else if( parseMatch(name, "priority2") )
+        {
+            errno = 0;
+            char *pEnd;
+            unsigned long p2 = strtoul(value, &pEnd, 10);
+            if( *pEnd == '\0' && errno == 0 && p2 <= UCHAR_MAX) {
+                valOK = true;
+                parser->_config.priority2 = (unsigned char)p2;
             }
         }
     }
@@ -328,4 +348,3 @@ uint32_t findSpeedByName( const char *name, const char **end )
 
 	return iter->speed;
 }
-

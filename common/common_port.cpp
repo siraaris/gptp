@@ -53,6 +53,8 @@ CommonPort::CommonPort( PortInit_t *portInit ) :
 	link_thread = thread_factory->createThread();
 	listening_thread = thread_factory->createThread();
 	sync_receipt_thresh = portInit->syncReceiptThreshold;
+	announce_receipt_timeout = portInit->announceReceiptTimeout;
+	sync_receipt_timeout = portInit->syncReceiptTimeout;
 	wrongSeqIDCounter = 0;
 	_peer_rate_offset = 1.0;
 	_peer_offset_init = false;
@@ -295,6 +297,24 @@ bool CommonPort::restoreSerializedState
 	return ret;
 }
 
+static uint64_t receiptTimeoutToNanoseconds
+( unsigned int multiplier, signed char log_interval )
+{
+	return (uint64_t)(multiplier *
+			  (pow((double)2, log_interval) * 1000000000.0));
+}
+
+uint64_t CommonPort::getSyncReceiptTimeoutInterval(void)
+{
+	return receiptTimeoutToNanoseconds(sync_receipt_timeout, getSyncInterval());
+}
+
+uint64_t CommonPort::getAnnounceReceiptTimeoutInterval(void)
+{
+	return receiptTimeoutToNanoseconds
+		(announce_receipt_timeout, getAnnounceInterval());
+}
+
 void CommonPort::startSyncReceiptTimer
 ( long long unsigned int waitTime )
 {
@@ -493,16 +513,9 @@ bool CommonPort::processSyncAnnounceTimeout( Event e )
 	if( e == ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES ) {
 		clock->addEventTimerLocked
 			(this, ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES,
-			 (ANNOUNCE_RECEIPT_TIMEOUT_MULTIPLIER*
-			  (unsigned long long)
-			  (pow((double)2,getAnnounceInterval())*
-			   1000000000.0)));
+			 getAnnounceReceiptTimeoutInterval());
 	} else {
-		startSyncReceiptTimer
-			((unsigned long long)
-			 (SYNC_RECEIPT_TIMEOUT_MULTIPLIER *
-			  ((double) pow((double)2, getSyncInterval()) *
-			   1000000000.0)));
+		startSyncReceiptTimer(getSyncReceiptTimeoutInterval());
 	}
 
 	if( getPortState() == PTP_MASTER )
@@ -571,7 +584,7 @@ bool CommonPort::processEvent( Event e )
 		else
 		{
 			clock->addEventTimerLocked(this, ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES,
-				(uint64_t) ( ANNOUNCE_RECEIPT_TIMEOUT_MULTIPLIER * pow(2.0, getAnnounceInterval()) * 1000000000.0 ));
+				getAnnounceReceiptTimeoutInterval());
 		}
 
 		// Do any media specific initialization

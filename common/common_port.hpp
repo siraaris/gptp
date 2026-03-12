@@ -45,8 +45,6 @@
 
 #include <math.h>
 
-#define SYNC_RECEIPT_TIMEOUT_MULTIPLIER 3 /*!< Sync rcpt timeout multiplier */
-#define ANNOUNCE_RECEIPT_TIMEOUT_MULTIPLIER 3 /*!< Annc rcpt timeout mult */
 #define LOG2_INTERVAL_INVALID -127 /* Invalid Log base 2 interval value */
 
 class IEEE1588Clock;
@@ -266,6 +264,12 @@ typedef struct {
 	/* sync receipt threshold */
 	unsigned int syncReceiptThreshold;
 
+	/* announce receipt timeout multiplier */
+	unsigned int announceReceiptTimeout;
+
+	/* sync receipt timeout multiplier */
+	unsigned int syncReceiptTimeout;
+
 	/* neighbor delay threshold */
 	int64_t neighborPropDelayThreshold;
 
@@ -333,6 +337,8 @@ private:
 
 	/*Sync threshold*/
 	unsigned int sync_receipt_thresh;
+	unsigned int announce_receipt_timeout;
+	unsigned int sync_receipt_timeout;
 	unsigned int wrongSeqIDCounter;
 
 	PortCounters_t counters;
@@ -382,7 +388,10 @@ protected:
 
 public:
 	static const int64_t NEIGHBOR_PROP_DELAY_THRESH = 800;
+	static const unsigned int DEFAULT_ANNOUNCE_RECEIPT_TIMEOUT = 3;
+	static const unsigned int DEFAULT_SYNC_RECEIPT_TIMEOUT = 3;
 	static const unsigned int DEFAULT_SYNC_RECEIPT_THRESH = 5;
+	static const unsigned int MILAN_AS_CAPABLE_PDELAY_COUNT = 2;
 
 	CommonPort( PortInit_t *portInit );
 	virtual ~CommonPort();
@@ -1473,6 +1482,18 @@ public:
 	void startAnnounceIntervalTimer(long long unsigned int waitTime);
 
 	/**
+	 * @brief Gets the current announce receipt timeout in nanoseconds.
+	 * @return Timeout in nanoseconds.
+	 */
+	uint64_t getAnnounceReceiptTimeoutInterval(void);
+
+	/**
+	 * @brief Gets the current sync receipt timeout in nanoseconds.
+	 * @return Timeout in nanoseconds.
+	 */
+	uint64_t getSyncReceiptTimeoutInterval(void);
+
+	/**
 	 * @brief  Starts announce event timer
 	 * @return void
 	 */
@@ -1584,9 +1605,8 @@ public:
 	 * Default constructor sets 0 PHY compensation
 	 */
 	phy_delay_spec_t()
-	{
-		phy_delay_spec_t( 0, 0 );
-	}
+		: tx_delay(0), rx_delay(0)
+	{}
 
 	/**
 	 * @brief sets PHY compensation

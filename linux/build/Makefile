@@ -31,6 +31,7 @@
 ALTERNATE_LINUX_INCPATH=$(HOME)/header/include/
 
 CFLAGS_G = -Wall -g -I. -I../../common -I../src \
+        -I/root/src/igb_avb/lib \
 	-I$(ALTERNATE_LINUX_INCPATH)
 
 # Check to see if PTP cross-timestamping is supported in hardware/driver
@@ -91,9 +92,11 @@ HEADER_FILES = $(COMMON_DIR)/ether_port.hpp\
 
 ifeq ($(ARCH),I210)
 	IGB_LIB_INCPATH=../../../../lib/igb/
+	IGB_LIB_INCPATH_LOCAL=/root/src/igb_avb/lib/
 	IGB_LIB_PATH=../../../../lib/igb/
-	CFLAGS_G += -I$(IGB_LIB_INCPATH) -DWITH_IGBLIB
-	LDFLAGS_G += -lz -ligb -lpci -L$(IGB_LIB_PATH)
+	IGB_LIB_PATH_LOCAL=/root/src/igb_avb/lib/
+	CFLAGS_G += -I$(IGB_LIB_INCPATH) -I$(IGB_LIB_INCPATH_LOCAL) -DWITH_IGBLIB
+	LDFLAGS_G += -lz -ligb -lpci -L$(IGB_LIB_PATH) -L$(IGB_LIB_PATH_LOCAL)
 	OBJ_FILES += $(OBJ_DIR)/linux_hal_generic.o \
 		$(OBJ_DIR)/linux_hal_generic_adj.o
 	OBJ_FILES += $(OBJ_DIR)/linux_hal_i210.o

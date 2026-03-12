@@ -879,12 +879,7 @@ void PTPMessageAnnounce::processMessage( CommonPort *port )
  bail:
 	port->getClock()->addEventTimerLocked
 		(port, ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES,
-		 (unsigned long long)
-		 (ANNOUNCE_RECEIPT_TIMEOUT_MULTIPLIER *
-		  (pow
-		   ((double)2,
-			port->getAnnounceInterval()) *
-		   1000000000.0)));
+		 port->getAnnounceReceiptTimeoutInterval());
 }
 
 void PTPMessageSync::processMessage( CommonPort *port )
@@ -1156,10 +1151,7 @@ void PTPMessageFollowUp::processMessage
 
 		port->syncDone();
 		// Restart the SYNC_RECEIPT timer
-		port->startSyncReceiptTimer((unsigned long long)
-			(SYNC_RECEIPT_TIMEOUT_MULTIPLIER *
-			((double)pow((double)2, port->getSyncInterval()) *
-				1000000000.0)));
+		port->startSyncReceiptTimer(port->getSyncReceiptTimeoutInterval());
 	}
 
 	uint16_t lastGmTimeBaseIndicator;
@@ -1458,6 +1450,8 @@ void PTPMessagePathDelayResp::processMessage( CommonPort *port )
 
 			if( eport->incrementDuplicateRespCounter() ) {
 				GPTP_LOG_ERROR("Remote misbehaving. Stopping PDelay Requests for 5 minutes.");
+				eport->setAsCapable(false);
+				eport->setPdelayCount(0);
 				eport->stopPDelay();
 				eport->getClock()->addEventTimerLocked
 					(port, PDELAY_RESP_PEER_MISBEHAVING_TIMEOUT_EXPIRES, (int64_t)(300 * 1000000000.0));
@@ -1817,16 +1811,13 @@ void PTPMessagePathDelayRespFollowUp::processMessage
 	}
 	if( !port->setLinkDelay( link_delay ))
 	{
-		if( !eport->getAutomotiveProfile( ))
-		{
-			GPTP_LOG_ERROR( "Link delay %ld beyond "
-					"neighborPropDelayThresh; "
-					"not AsCapable", link_delay );
-			port->setAsCapable( false );
-		}
+		GPTP_LOG_ERROR( "Link delay %ld beyond "
+				"neighborPropDelayThresh; "
+				"not AsCapable", link_delay );
+		port->setAsCapable( false );
 	} else
 	{
-		if( !eport->getAutomotiveProfile( ))
+		if( port->getPdelayCount() >= CommonPort::MILAN_AS_CAPABLE_PDELAY_COUNT )
 			port->setAsCapable( true );
 	}
 	port->setPeerOffset( request_tx_timestamp, remote_req_rx_timestamp );
