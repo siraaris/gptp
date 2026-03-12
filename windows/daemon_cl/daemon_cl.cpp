@@ -125,6 +125,10 @@ int _tmain(int argc, _TCHAR* argv[])
 	portInit.thread_factory = NULL;
 	portInit.timer_factory = NULL;
 	portInit.lock_factory = NULL;
+	portInit.announceReceiptTimeout =
+		CommonPort::DEFAULT_ANNOUNCE_RECEIPT_TIMEOUT;
+	portInit.syncReceiptTimeout =
+		CommonPort::DEFAULT_SYNC_RECEIPT_TIMEOUT;
 	portInit.neighborPropDelayThreshold =
 		CommonPort::NEIGHBOR_PROP_DELAY_THRESH;
 

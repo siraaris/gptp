@@ -394,11 +394,29 @@ public:
   }
 
   /**
+   * @brief  Sets IEEE1588Clock priority1 attribute
+   * @param  priority1 Priority1 value
+   * @return void
+   */
+  void setPriority1( unsigned char priority1 ) {
+	  this->priority1 = priority1;
+  }
+
+  /**
    * @brief  Gets IEEE1588Clock priority2 attribute (IEEE 802.1AS-2011 Clause 8.6.2.5)
    * @return Priority2 value
    */
   unsigned char getPriority2(void) {
 	  return priority2;
+  }
+
+  /**
+   * @brief  Sets IEEE1588Clock priority2 attribute
+   * @param  priority2 Priority2 value
+   * @return void
+   */
+  void setPriority2( unsigned char priority2 ) {
+	  this->priority2 = priority2;
   }
 
   /**

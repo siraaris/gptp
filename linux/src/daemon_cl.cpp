@@ -143,6 +143,7 @@ int main(int argc, char **argv)
 	int i;
 	bool pps = false;
 	uint8_t priority1 = 248;
+	bool priority1_override = false;
 	bool override_portstate = false;
 	PortState port_state = PTP_SLAVE;
 	char *restoredata = NULL;
@@ -197,6 +198,10 @@ int main(int argc, char **argv)
 	portInit.lock_factory = NULL;
 	portInit.syncReceiptThreshold =
 		CommonPort::DEFAULT_SYNC_RECEIPT_THRESH;
+	portInit.announceReceiptTimeout =
+		CommonPort::DEFAULT_ANNOUNCE_RECEIPT_TIMEOUT;
+	portInit.syncReceiptTimeout =
+		CommonPort::DEFAULT_SYNC_RECEIPT_TIMEOUT;
 	portInit.neighborPropDelayThreshold =
 		CommonPort::NEIGHBOR_PROP_DELAY_THRESH;
 
@@ -267,11 +272,12 @@ int main(int argc, char **argv)
 							"command line, using default value\n" );
 				} else {
 					unsigned long tmp = strtoul( argv[i+1], NULL, 0 ); ++i;
-					if( tmp == 0 ) {
+					if( tmp > 255 ) {
 						printf( "Invalid priority 1 value, using "
 								"default value\n" );
 					} else {
 						priority1 = (uint8_t) tmp;
+						priority1_override = true;
 					}
 				}
 			}
@@ -279,7 +285,26 @@ int main(int argc, char **argv)
 				int phy_delay[4];
 				input_delay=true;
 				int delay_count=0;
-				char *cli_inp_delay = strtok(argv[i+1],",");
+				char delay_arg[128];
+				char *saveptr = NULL;
+				char *cli_inp_delay = NULL;
+
+				if( i+1 >= argc ) {
+					printf("Phy delay values must be specified\n");
+					print_usage( argv[0] );
+					GPTP_LOG_UNREGISTER();
+					return 0;
+				}
+				++i;
+
+				if( strlen(argv[i]) >= sizeof(delay_arg) ) {
+					printf("Phy delay argument is too long\n");
+					print_usage( argv[0] );
+					GPTP_LOG_UNREGISTER();
+					return 0;
+				}
+				memcpy(delay_arg, argv[i], strlen(argv[i]) + 1);
+				cli_inp_delay = strtok_r(delay_arg, ",", &saveptr);
 				while (cli_inp_delay != NULL)
 				{
 					if(delay_count>3)
@@ -291,7 +316,7 @@ int main(int argc, char **argv)
 					}
 					phy_delay[delay_count]=atoi(cli_inp_delay);
 					delay_count++;
-					cli_inp_delay = strtok(NULL,",");
+					cli_inp_delay = strtok_r(NULL, ",", &saveptr);
 				}
 				if (delay_count != 4)
 				{
@@ -333,7 +358,13 @@ int main(int argc, char **argv)
 			{
 				if( i+1 < argc ) {
 					use_config_file = true;
-					strcpy(config_file_path, argv[i+1]);
+					++i;
+					if( strlen(argv[i]) >= sizeof(config_file_path) ) {
+						fprintf(stderr, "config file path too long.\n");
+						GPTP_LOG_UNREGISTER();
+						return -1;
+					}
+					memcpy(config_file_path, argv[i], strlen(argv[i]) + 1);
 				} else {
 					fprintf(stderr, "config file must be specified.\n");
 				}
@@ -414,11 +445,22 @@ int main(int argc, char **argv)
 		else
 		{
 			GPTP_LOG_INFO("priority1 = %d", iniParser.getPriority1());
+			GPTP_LOG_INFO("priority2 = %d", iniParser.getPriority2());
 			GPTP_LOG_INFO("announceReceiptTimeout: %d", iniParser.getAnnounceReceiptTimeout());
 			GPTP_LOG_INFO("syncReceiptTimeout: %d", iniParser.getSyncReceiptTimeout());
 			iniParser.print_phy_delay();
 			GPTP_LOG_INFO("neighborPropDelayThresh: %ld", iniParser.getNeighborPropDelayThresh());
 			GPTP_LOG_INFO("syncReceiptThreshold: %d", iniParser.getSyncReceiptThresh());
+
+			if (!priority1_override) {
+				pClock->setPriority1(iniParser.getPriority1());
+			}
+			pClock->setPriority2(iniParser.getPriority2());
+
+			portInit.announceReceiptTimeout =
+				iniParser.getAnnounceReceiptTimeout();
+			portInit.syncReceiptTimeout =
+				iniParser.getSyncReceiptTimeout();
 
 			/* If using config file, set the neighborPropDelayThresh.
 			 * Otherwise it will use its default value (800ns) */
