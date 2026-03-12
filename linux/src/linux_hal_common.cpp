@@ -62,6 +62,10 @@
 #include <linux/sockios.h>
 #include <gptp_cfg.hpp>
 
+static const bool g_gptp_tx_priority_tag = false;
+static const uint16_t g_gptp_tx_vid = 0;
+static const uint8_t g_gptp_tx_pcp = 7;
+
 Timestamp tsToTimestamp(struct timespec *ts)
 {
 	Timestamp ret;
@@ -85,29 +89,67 @@ LinuxNetworkInterface::~LinuxNetworkInterface() {
 
 net_result LinuxNetworkInterface::send
 ( LinkLayerAddress *addr, uint16_t etherType, uint8_t *payload, size_t length, bool timestamp ) {
-	sockaddr_ll *remote = NULL;
+	sockaddr_ll remote;
 	int err;
-	remote = new struct sockaddr_ll;
-	memset( remote, 0, sizeof( *remote ));
-	remote->sll_family = AF_PACKET;
-	remote->sll_protocol = PLAT_htons( etherType );
-	remote->sll_ifindex = ifindex;
-	remote->sll_halen = ETH_ALEN;
-	addr->toOctetArray( remote->sll_addr );
+	static unsigned int logged_tx_debug = 0;
+	if( g_gptp_tx_priority_tag && length > 1500 ) {
+		GPTP_LOG_ERROR("Failed to send: payload too large for VLAN-tagged gPTP (%zu)", length);
+		return net_fatal;
+	}
+	memset(&remote, 0, sizeof(remote));
+	remote.sll_family = AF_PACKET;
+	remote.sll_ifindex = ifindex;
+	remote.sll_halen = ETH_ALEN;
+	addr->toOctetArray(remote.sll_addr);
+
+	if( etherType == PTP_ETHERTYPE && length >= PTP_COMMON_HDR_LENGTH && logged_tx_debug < 48 ) {
+		uint8_t msgtype = payload[PTP_COMMON_HDR_TRANSSPEC_MSGTYPE(PTP_COMMON_HDR_OFFSET)] & 0x0F;
+		uint16_t seqid = PLAT_ntohs(*(uint16_t *)(payload + PTP_COMMON_HDR_SEQUENCE_ID(PTP_COMMON_HDR_OFFSET)));
+		GPTP_LOG_INFO(
+			"TX send: socket=%s msgType=%u seq=%u len=%zu dest=%02x:%02x:%02x:%02x:%02x:%02x proto=0x%04x",
+			timestamp ? "event" : "general",
+			msgtype,
+			seqid,
+			length,
+			remote.sll_addr[0], remote.sll_addr[1], remote.sll_addr[2],
+			remote.sll_addr[3], remote.sll_addr[4], remote.sll_addr[5],
+			etherType);
+		++logged_tx_debug;
+	}
 
 	if( timestamp ) {
 #ifndef ARCH_INTELCE
 		net_lock.lock();
 #endif
-		err = sendto
-			( sd_event, payload, length, 0, (sockaddr *) remote,
-			  sizeof( *remote ));
+		if( g_gptp_tx_priority_tag ) {
+			/* Priority-tagged frame (VID 0) with encapsulated original EtherType. */
+			uint8_t tagged[1504];
+			uint16_t tci = PLAT_htons((uint16_t)(((g_gptp_tx_pcp & 0x7) << 13) | (g_gptp_tx_vid & 0x0FFF)));
+			uint16_t inner = PLAT_htons(etherType);
+			memcpy(tagged, &tci, sizeof(tci));
+			memcpy(tagged + sizeof(tci), &inner, sizeof(inner));
+			memcpy(tagged + 4, payload, length);
+			remote.sll_protocol = PLAT_htons(ETH_P_8021Q);
+			err = sendto(sd_event, tagged, length + 4, 0, (sockaddr *)&remote, sizeof(remote));
+		} else {
+			remote.sll_protocol = PLAT_htons(etherType);
+			err = sendto(sd_event, payload, length, 0, (sockaddr *)&remote, sizeof(remote));
+		}
 	} else {
-		err = sendto
-			( sd_general, payload, length, 0, (sockaddr *) remote,
-			  sizeof( *remote ));
+		if( g_gptp_tx_priority_tag ) {
+			uint8_t tagged[1504];
+			uint16_t tci = PLAT_htons((uint16_t)(((g_gptp_tx_pcp & 0x7) << 13) | (g_gptp_tx_vid & 0x0FFF)));
+			uint16_t inner = PLAT_htons(etherType);
+			memcpy(tagged, &tci, sizeof(tci));
+			memcpy(tagged + sizeof(tci), &inner, sizeof(inner));
+			memcpy(tagged + 4, payload, length);
+			remote.sll_protocol = PLAT_htons(ETH_P_8021Q);
+			err = sendto(sd_general, tagged, length + 4, 0, (sockaddr *)&remote, sizeof(remote));
+		} else {
+			remote.sll_protocol = PLAT_htons(etherType);
+			err = sendto(sd_general, payload, length, 0, (sockaddr *)&remote, sizeof(remote));
+		}
 	}
-	delete remote;
 	if( err == -1 ) {
 		GPTP_LOG_ERROR( "Failed to send: %s(%d)", strerror(errno), errno );
 		return net_fatal;
@@ -1069,6 +1111,15 @@ bool LinuxNetworkInterfaceFactory::createInterface
 			( "failed to open event socket: %s ", strerror(errno));
 		goto exit_error;
 	}
+	if( g_gptp_tx_priority_tag ) {
+		int sk_prio = g_gptp_tx_pcp;
+		if( setsockopt(net_iface_l->sd_event, SOL_SOCKET, SO_PRIORITY, &sk_prio, sizeof(sk_prio)) == -1 ) {
+			GPTP_LOG_WARNING("Failed to set SO_PRIORITY on event socket: %s", strerror(errno));
+		}
+		if( setsockopt(net_iface_l->sd_general, SOL_SOCKET, SO_PRIORITY, &sk_prio, sizeof(sk_prio)) == -1 ) {
+			GPTP_LOG_WARNING("Failed to set SO_PRIORITY on general socket: %s", strerror(errno));
+		}
+	}
 
 	memset( &device, 0, sizeof(device));
 	ifname->toString( device.ifr_name, IFNAMSIZ - 1 );
@@ -1103,16 +1154,36 @@ bool LinuxNetworkInterfaceFactory::createInterface
 			  ifindex );
 		goto exit_error;
 	}
+	err = setsockopt
+		( net_iface_l->sd_general, SOL_PACKET, PACKET_ADD_MEMBERSHIP,
+		  &mr_8021as, sizeof( mr_8021as ));
+	if( err == -1 ) {
+		GPTP_LOG_ERROR
+			( "Unable to add PTP multicast addresses to general port id: %u",
+			  ifindex );
+		goto exit_error;
+	}
 
 	memset( &ifsock_addr, 0, sizeof( ifsock_addr ));
 	ifsock_addr.sll_family = AF_PACKET;
 	ifsock_addr.sll_ifindex = ifindex;
-	ifsock_addr.sll_protocol = PLAT_htons( PTP_ETHERTYPE );
+	/* Some Linux drivers only deliver RX timestamping reliably for L2 PTP
+	 * when the packet socket is bound to ETH_P_ALL rather than filtered to
+	 * the 0x88f7 EtherType.
+	 */
+	ifsock_addr.sll_protocol = PLAT_htons( ETH_P_ALL );
 	err = bind
 		( net_iface_l->sd_event, (sockaddr *) &ifsock_addr,
 		  sizeof( ifsock_addr ));
 	if( err == -1 ) {
 		GPTP_LOG_ERROR( "Call to bind() failed: %s", strerror(errno) );
+		goto exit_error;
+	}
+	err = bind
+		( net_iface_l->sd_general, (sockaddr *) &ifsock_addr,
+		  sizeof( ifsock_addr ));
+	if( err == -1 ) {
+		GPTP_LOG_ERROR( "Call to general bind() failed: %s", strerror(errno) );
 		goto exit_error;
 	}
 
@@ -1126,6 +1197,9 @@ bool LinuxNetworkInterfaceFactory::createInterface
 		( ifindex, net_iface_l->sd_event, &net_iface_l->net_lock )) {
 		GPTP_LOG_ERROR( "post_init failed\n" );
 		goto exit_error;
+	}
+	if( g_gptp_tx_priority_tag ) {
+		GPTP_LOG_INFO("gPTP TX priority tagging enabled (PCP=%u, VID=%u)", g_gptp_tx_pcp, g_gptp_tx_vid);
 	}
 	*net_iface = net_iface_l;
 	return true;

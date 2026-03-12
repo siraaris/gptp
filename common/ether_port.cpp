@@ -103,7 +103,7 @@ EtherPort::EtherPort( PortInit_t *portInit ) :
 
 	if (getAutomotiveProfile())
 	{
-		setAsCapable( true );
+		setAsCapable( false );
 
 		if (getInitSyncInterval() == LOG2_INTERVAL_INVALID)
 			setInitSyncInterval( -5 );     // 31.25 ms
@@ -381,10 +381,7 @@ bool EtherPort::_processEvent( Event e )
 					delete sigMsg;
 				}
 
-				startSyncReceiptTimer((unsigned long long)
-					 (SYNC_RECEIPT_TIMEOUT_MULTIPLIER *
-					  ((double) pow((double)2, getSyncInterval()) *
-					   1000000000.0)));
+				startSyncReceiptTimer(getSyncReceiptTimeoutInterval());
 			}
 		}
 
@@ -418,15 +415,12 @@ bool EtherPort::_processEvent( Event e )
 		} else {
 			clock->addEventTimerLocked
 				( this, ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES,
-				  (uint64_t)
-				  ( ANNOUNCE_RECEIPT_TIMEOUT_MULTIPLIER *
-				    pow( 2.0, getAnnounceInterval( )) *
-				    1000000000.0 ));
+				  getAnnounceReceiptTimeoutInterval());
 		}
 
 		if( getAutomotiveProfile( ))
 		{
-			setAsCapable( true );
+			setAsCapable( false );
 
 			setStationState(STATION_STATE_ETHERNET_READY);
 			if (getTestMode())
@@ -451,10 +445,7 @@ bool EtherPort::_processEvent( Event e )
 					delete sigMsg;
 				}
 
-				startSyncReceiptTimer((unsigned long long)
-					 (SYNC_RECEIPT_TIMEOUT_MULTIPLIER *
-					  ((double) pow((double)2, getSyncInterval()) *
-					   1000000000.0)));
+				startSyncReceiptTimer(getSyncReceiptTimeoutInterval());
 			}
 
 			// Reset Sync count and pdelay count
@@ -486,9 +477,9 @@ bool EtherPort::_processEvent( Event e )
 			GPTP_LOG_EXCEPTION("LINK DOWN");
 		}
 		else {
-			setAsCapable(false);
 			GPTP_LOG_STATUS("LINK DOWN");
 		}
+		setAsCapable(false);
 		if (getTestMode())
 		{
 			linkDownCount++;
@@ -508,10 +499,7 @@ bool EtherPort::_processEvent( Event e )
 		if (e == SYNC_RECEIPT_TIMEOUT_EXPIRES) {
 			GPTP_LOG_EXCEPTION("SYNC receipt timeout");
 
-			startSyncReceiptTimer((unsigned long long)
-					      (SYNC_RECEIPT_TIMEOUT_MULTIPLIER *
-					       ((double) pow((double)2, getSyncInterval()) *
-						1000000000.0)));
+			startSyncReceiptTimer(getSyncReceiptTimeoutInterval());
 		}
 		ret = true;
 		break;
@@ -632,10 +620,7 @@ bool EtherPort::_processEvent( Event e )
 		break;
 	case FAULT_DETECTED:
 		GPTP_LOG_ERROR("Received FAULT_DETECTED event");
-		if( !getAutomotiveProfile( ))
-		{
-			setAsCapable(false);
-		}
+		setAsCapable(false);
 		break;
 	case PDELAY_DEFERRED_PROCESSING:
 		GPTP_LOG_DEBUG("PDELAY_DEFERRED_PROCESSING occured");
@@ -652,11 +637,8 @@ bool EtherPort::_processEvent( Event e )
 		pdelay_rx_lock->unlock();
 		break;
 	case PDELAY_RESP_RECEIPT_TIMEOUT_EXPIRES:
-		if( !getAutomotiveProfile( ))
-		{
-			GPTP_LOG_EXCEPTION("PDelay Response Receipt Timeout");
-			setAsCapable(false);
-		}
+		GPTP_LOG_EXCEPTION("PDelay Response Receipt Timeout");
+		setAsCapable(false);
 		setPdelayCount( 0 );
 		break;
 
@@ -703,10 +685,7 @@ bool EtherPort::_processEvent( Event e )
 						delete sigMsg;
 					}
 
-					startSyncReceiptTimer((unsigned long long)
-						 (SYNC_RECEIPT_TIMEOUT_MULTIPLIER *
-						  ((double) pow((double)2, getSyncInterval()) *
-						   1000000000.0)));
+					startSyncReceiptTimer(getSyncReceiptTimeoutInterval());
 				}
 			}
 		}
@@ -760,9 +739,7 @@ void EtherPort::becomeSlave( bool restart_syntonization ) {
 	{
 		clock->addEventTimerLocked
 		  (this, ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES,
-		   (ANNOUNCE_RECEIPT_TIMEOUT_MULTIPLIER*
-			(unsigned long long)
-			(pow((double)2,getAnnounceInterval())*1000000000.0)));
+		   getAnnounceReceiptTimeoutInterval());
 	}
 
 	GPTP_LOG_STATUS("Switching to Slave" );

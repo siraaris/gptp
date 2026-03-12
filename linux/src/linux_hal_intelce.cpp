@@ -38,6 +38,7 @@ extern "C" {
 #include <ismd_core.h>
 }
 #include <netpacket/packet.h>
+#include <net/ethernet.h>
 #include <errno.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -223,13 +224,36 @@ net_result LinuxNetworkInterface::nrecv
 		goto done;
 	}
 
-	err = recv( sd_event, payload, length, 0 );
+	socklen_t remote_len = sizeof(remote);
+	memset(&remote, 0, sizeof(remote));
+	err = recvfrom(sd_event, payload, length, 0, (struct sockaddr *)&remote, &remote_len);
 	if( err < 0 ) {
 		GPTP_LOG_ERROR( "recvmsg() failed: %s", strerror(errno) );
 		ret = net_fatal;
 		goto done;
 	}
 	*addr = LinkLayerAddress( remote.sll_addr );
+	{
+		uint16_t rx_proto = PLAT_ntohs(remote.sll_protocol);
+		if (rx_proto == ETH_P_8021Q) {
+			if (err < 4) {
+				ret = net_trfail;
+				goto done;
+			}
+			uint16_t inner;
+			memcpy(&inner, payload + 2, sizeof(inner));
+			inner = PLAT_ntohs(inner);
+			if (inner != PTP_ETHERTYPE) {
+				ret = net_trfail;
+				goto done;
+			}
+			memmove(payload, payload + 4, err - 4);
+			err -= 4;
+		} else if (rx_proto != PTP_ETHERTYPE) {
+			ret = net_trfail;
+			goto done;
+		}
+	}
 
 	length = err;
 

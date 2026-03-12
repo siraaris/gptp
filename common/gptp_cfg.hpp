@@ -67,6 +67,7 @@ class GptpIniParser
         {
             /*ptp data set*/
             unsigned char priority1;
+            unsigned char priority2;
 
             /*port data set*/
             unsigned int announceReceiptTimeout;
@@ -102,6 +103,16 @@ class GptpIniParser
         unsigned char getPriority1(void)
         {
             return _config.priority1;
+        }
+
+        /**
+         * @brief  Reads priority2 config value
+         * @param  void
+         * @return priority2
+         */
+        unsigned char getPriority2(void)
+        {
+            return _config.priority2;
         }
 
         /**
@@ -174,4 +185,3 @@ class GptpIniParser
         static int iniCallBack(void *user, const char *section, const char *name, const char *value);
         static bool parseMatch(const char *s1, const char *s2);
 };
-
