@@ -102,7 +102,7 @@ net_result LinuxNetworkInterface::send
 	remote.sll_halen = ETH_ALEN;
 	addr->toOctetArray(remote.sll_addr);
 
-	if( etherType == PTP_ETHERTYPE && length >= PTP_COMMON_HDR_LENGTH && logged_tx_debug < 48 ) {
+	if( etherType == PTP_ETHERTYPE && length >= PTP_COMMON_HDR_LENGTH && logged_tx_debug < 8 ) {
 		uint8_t msgtype = payload[PTP_COMMON_HDR_TRANSSPEC_MSGTYPE(PTP_COMMON_HDR_OFFSET)] & 0x0F;
 		uint16_t seqid = PLAT_ntohs(*(uint16_t *)(payload + PTP_COMMON_HDR_SEQUENCE_ID(PTP_COMMON_HDR_OFFSET)));
 		GPTP_LOG_INFO(

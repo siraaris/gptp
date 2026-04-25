@@ -182,8 +182,8 @@ public:
 		std::list<RxTimestampRecord>::iterator it;
 		for( it = rxTimestampList.begin(); it != rxTimestampList.end(); ++it ) {
 			if( it->messageId == messageId ) {
-				if( logged_rx_pop_debug < 40 ) {
-					GPTP_LOG_WARNING(
+				if( logged_rx_pop_debug < 12 ) {
+					GPTP_LOG_STATUS(
 						"Pop RX timestamp: requested msgType=%u seq=%u queue_before=%zu matched msgType=%u seq=%u ts=%hu,%u,%u",
 						messageId.getMessageType(), messageId.getSequenceId(),
 						rxTimestampList.size(),
@@ -198,8 +198,8 @@ public:
 			}
 		}
 
-		if( logged_rx_pop_debug < 40 ) {
-			GPTP_LOG_WARNING(
+		if( logged_rx_pop_debug < 12 ) {
+			GPTP_LOG_STATUS(
 				"Pop RX timestamp: requested msgType=%u seq=%u queue=%zu result=EAGAIN",
 				messageId.getMessageType(), messageId.getSequenceId(),
 				rxTimestampList.size());

@@ -202,8 +202,8 @@ net_result LinuxNetworkInterface::nrecv
 			continue;
 		}
 
-		if( vlan_tagged && logged_rx_vlan_debug < 12 ) {
-			GPTP_LOG_WARNING(
+		if( vlan_tagged && logged_rx_vlan_debug < 4 ) {
+			GPTP_LOG_INFO(
 				"RX gPTP VLAN tag stripped: protocol=0x%04x len=%d",
 				rx_proto, err );
 			++logged_rx_vlan_debug;
@@ -214,7 +214,7 @@ net_result LinuxNetworkInterface::nrecv
 		}
 
 		packet_is_event = (payload[0] & 0x8) == 0;
-		if( active_sd == sd_general && logged_rx_general_debug < 80 ) {
+		if( active_sd == sd_general && logged_rx_general_debug < 12 ) {
 			uint8_t tspec = (payload[0] >> 4) & 0x0F;
 			uint8_t msg = payload[0] & 0x0F;
 			uint16_t seq = PLAT_ntohs(*((uint16_t *)(payload + PTP_COMMON_HDR_SEQUENCE_ID(PTP_COMMON_HDR_OFFSET))));
@@ -223,7 +223,7 @@ net_result LinuxNetworkInterface::nrecv
 				 "%02x:%02x:%02x:%02x:%02x:%02x",
 				 remote.sll_addr[0], remote.sll_addr[1], remote.sll_addr[2],
 				 remote.sll_addr[3], remote.sll_addr[4], remote.sll_addr[5]);
-			GPTP_LOG_WARNING(
+			GPTP_LOG_INFO(
 				"RX general: from=%s proto=0x%04x vlan=%d tspec=%u msg=%u seq=%u len=%d first=%02x %02x %02x %02x",
 				remote_str, rx_proto, vlan_tagged ? 1 : 0, tspec, msg, seq, err,
 				payload[0], payload[1], payload[2], payload[3]);
@@ -250,8 +250,9 @@ net_result LinuxNetworkInterface::nrecv
 		/* Retrieve the timestamp */
 		cmsg = CMSG_FIRSTHDR(&msg);
 		while( cmsg != NULL ) {
-			if( logged_rx_ancillary_debug < 12 ) {
-				GPTP_LOG_WARNING(
+			bool log_rx_ancillary = logged_rx_ancillary_debug < 4;
+			if( log_rx_ancillary ) {
+				GPTP_LOG_INFO(
 					"RX event ancillary: msg_flags=0x%x cmsg_level=%d cmsg_type=%d cmsg_len=%zu",
 					msg.msg_flags, cmsg->cmsg_level, cmsg->cmsg_type,
 					(size_t)cmsg->cmsg_len);
@@ -264,12 +265,15 @@ net_result LinuxNetworkInterface::nrecv
 				bool have_timestamp = false;
 				saw_timestamping_cmsg = true;
 
-				if( logged_rx_ancillary_debug < 12 ) {
-					GPTP_LOG_WARNING(
+				if( log_rx_ancillary ) {
+					GPTP_LOG_INFO(
 						"RX event SO_TIMESTAMPING: sw=%lld.%09ld sys=%lld.%09ld hw=%lld.%09ld",
 						(long long) ts[0].tv_sec, ts[0].tv_nsec,
 						(long long) ts[1].tv_sec, ts[1].tv_nsec,
 						(long long) ts[2].tv_sec, ts[2].tv_nsec);
+				}
+				if( log_rx_ancillary ) {
+					++logged_rx_ancillary_debug;
 				}
 
 				/* Prefer raw hardware RX timestamp, then transformed system,
@@ -298,8 +302,8 @@ net_result LinuxNetworkInterface::nrecv
 				}
 
 				if( have_timestamp ) {
-					if( logged_rx_queue_debug < 40 ) {
-						GPTP_LOG_WARNING(
+					if( logged_rx_queue_debug < 12 ) {
+						GPTP_LOG_STATUS(
 							"Queue RX timestamp: msgType=%u seq=%u before=%zu source=%s ts=%hu,%u,%u",
 							rx_message_type, rx_sequence_id,
 							gtimestamper->getQueuedRxTimestampCount(),
@@ -323,8 +327,8 @@ net_result LinuxNetworkInterface::nrecv
 			if( gtimestamper->HWTimestamper_gettime(
 					&system_now, &device_now,
 					&local_clock, &nominal_clock_rate )) {
-				if( logged_rx_queue_debug < 40 ) {
-					GPTP_LOG_WARNING(
+				if( logged_rx_queue_debug < 12 ) {
+					GPTP_LOG_STATUS(
 						"Queue RX timestamp: msgType=%u seq=%u before=%zu source=phc-now ts=%hu,%u,%u",
 						rx_message_type, rx_sequence_id,
 						gtimestamper->getQueuedRxTimestampCount(),
@@ -442,7 +446,7 @@ bool LinuxTimestamperGeneric::HWTimestamper_init
 	snprintf
 		( ptp_device+PTP_DEVICE_IDX_OFFS,
 		  sizeof(ptp_device)-PTP_DEVICE_IDX_OFFS, "%d", phc_index );
-	GPTP_LOG_ERROR("Using clock device: %s", ptp_device);
+	GPTP_LOG_STATUS("Using clock device: %s", ptp_device);
 	phc_fd = open( ptp_device, O_RDWR );
 	if( phc_fd == -1 || (_private->clockid = FD_TO_CLOCKID(phc_fd)) == -1 ) {
 		GPTP_LOG_ERROR("Failed to open PTP clock device");
@@ -546,16 +550,16 @@ int LinuxTimestamperGeneric::HWTimestamper_txtimestamp
 				matched_reflected_id = true;
 				break;
 			}
-			if( logged_tx_parse_debug < 12 ) {
-				GPTP_LOG_WARNING(
+			if( logged_tx_parse_debug < 4 ) {
+				GPTP_LOG_INFO(
 					"TX timestamp parse miss: want msgType=%u seq=%u candidate_off=%zu got msgType=%u seq=%u",
 					messageId.getMessageType(), messageId.getSequenceId(),
 					candidate, reflectedMessageId.getMessageType(),
 					reflectedMessageId.getSequenceId());
 			}
 		}
-		if( logged_tx_parse_debug < 12 ) {
-			GPTP_LOG_WARNING(
+		if( logged_tx_parse_debug < 4 ) {
+			GPTP_LOG_INFO(
 				"TX timestamp raw bytes: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
 				reflected_bytes[0], reflected_bytes[1], reflected_bytes[2], reflected_bytes[3],
 				reflected_bytes[4], reflected_bytes[5], reflected_bytes[6], reflected_bytes[7],
@@ -563,8 +567,8 @@ int LinuxTimestamperGeneric::HWTimestamper_txtimestamp
 				reflected_bytes[12], reflected_bytes[13], reflected_bytes[14], reflected_bytes[15]);
 			++logged_tx_parse_debug;
 		}
-		if( !matched_reflected_id && logged_tx_parse_debug < 12 ) {
-			GPTP_LOG_WARNING("TX timestamp will rely on serialized fallback for msgType=%u seq=%u",
+		if( !matched_reflected_id && logged_tx_parse_debug < 4 ) {
+			GPTP_LOG_INFO("TX timestamp will rely on serialized fallback for msgType=%u seq=%u",
 					 messageId.getMessageType(), messageId.getSequenceId());
 		}
 	}
@@ -594,8 +598,8 @@ int LinuxTimestamperGeneric::HWTimestamper_txtimestamp
 		ret = GPTP_EC_EAGAIN;
 	} else if( !matched_reflected_id ) {
 		static unsigned int logged_tx_fallback_debug = 0;
-		if( logged_tx_fallback_debug < 12 ) {
-			GPTP_LOG_WARNING(
+		if( logged_tx_fallback_debug < 4 ) {
+			GPTP_LOG_INFO(
 				"Using TX timestamp without reflected message-id match: msgType=%u seq=%u ts=%hu,%u,%u",
 				messageId.getMessageType(), messageId.getSequenceId(),
 				timestamp.seconds_ms, timestamp.seconds_ls, timestamp.nanoseconds);
