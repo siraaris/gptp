@@ -53,6 +53,53 @@
 #define TX_PHY_TIME 184
 #define RX_PHY_TIME 382
 
+static bool parse_reflected_tx_message_id
+( uint8_t *reflected_bytes, size_t reflected_length, PTPMessageId *messageId,
+  size_t *matched_offset )
+{
+	const size_t candidate_offsets[] = { 0, 4, ETHER_HDR_LEN, ETHER_HDR_LEN + 4 };
+	unsigned int i;
+
+	for( i = 0; i < sizeof(candidate_offsets) / sizeof(candidate_offsets[0]); ++i ) {
+		size_t candidate = candidate_offsets[i];
+		uint8_t *gptpCommonHeader;
+		uint16_t sequenceId;
+		uint16_t messageLength;
+		uint8_t version;
+
+		if( candidate + PTP_COMMON_HDR_LENGTH > reflected_length ) {
+			continue;
+		}
+
+		gptpCommonHeader = reflected_bytes + candidate;
+		version = *(PTP_COMMON_HDR_PTP_VERSION(gptpCommonHeader)) & 0x0F;
+		if( version != GPTP_VERSION ) {
+			continue;
+		}
+
+		memcpy( &messageLength, PTP_COMMON_HDR_MSG_LENGTH(gptpCommonHeader),
+			sizeof(messageLength) );
+		messageLength = PLAT_ntohs( messageLength );
+		if( messageLength < PTP_COMMON_HDR_LENGTH ) {
+			continue;
+		}
+
+		memcpy( &sequenceId, PTP_COMMON_HDR_SEQUENCE_ID(gptpCommonHeader),
+			sizeof(sequenceId) );
+		sequenceId = PLAT_ntohs( sequenceId );
+		messageId->setSequenceId( sequenceId );
+		messageId->setMessageType(
+			(MessageType)(*PTP_COMMON_HDR_TRANSSPEC_MSGTYPE(
+				gptpCommonHeader) & 0xF));
+		if( matched_offset != NULL ) {
+			*matched_offset = candidate;
+		}
+		return true;
+	}
+
+	return false;
+}
+
 static bool normalize_rx_gptp_payload( uint8_t *payload, int &length, uint16_t rx_proto, bool *vlan_tagged )
 {
 	if( vlan_tagged != NULL ) {
@@ -110,7 +157,6 @@ net_result LinuxNetworkInterface::nrecv
 {
 	fd_set readfds;
 	int err;
-	int active_sd;
 	struct msghdr msg;
 	struct cmsghdr *cmsg;
 	union {
@@ -127,7 +173,6 @@ net_result LinuxNetworkInterface::nrecv
 	static unsigned int logged_rx_ancillary_debug = 0;
 	static unsigned int logged_rx_queue_debug = 0;
 	static unsigned int logged_rx_vlan_debug = 0;
-	static unsigned int logged_rx_general_debug = 0;
 
 	struct timeval timeout = { 0, 16000 }; // 16 ms
 
@@ -140,16 +185,13 @@ net_result LinuxNetworkInterface::nrecv
 	}
 
 	for( ;; ) {
-		bool packet_is_event;
 		bool vlan_tagged = false;
 		uint16_t rx_proto;
 
 		FD_ZERO( &readfds );
 		FD_SET( sd_event, &readfds );
-		FD_SET( sd_general, &readfds );
 
-		active_sd = sd_event > sd_general ? sd_event : sd_general;
-		err = select( active_sd+1, &readfds, NULL, NULL, &timeout );
+		err = select( sd_event+1, &readfds, NULL, NULL, &timeout );
 		if( err == 0 ) {
 			ret = net_trfail;
 			goto done;
@@ -164,12 +206,10 @@ net_result LinuxNetworkInterface::nrecv
 				ret = net_fatal;
 				goto done;
 			}
-		} else if( !FD_ISSET( sd_event, &readfds ) &&
-			   !FD_ISSET( sd_general, &readfds )) {
+		} else if( !FD_ISSET( sd_event, &readfds )) {
 			ret = net_trfail;
 			goto done;
 		}
-		active_sd = FD_ISSET( sd_event, &readfds ) ? sd_event : sd_general;
 
 		memset( &msg, 0, sizeof( msg ));
 
@@ -185,7 +225,7 @@ net_result LinuxNetworkInterface::nrecv
 		msg.msg_control = &control;
 		msg.msg_controllen = sizeof(control);
 
-		err = recvmsg( active_sd, &msg, 0 );
+		err = recvmsg( sd_event, &msg, 0 );
 		if( err < 0 ) {
 			if( errno == ENOMSG ) {
 				GPTP_LOG_ERROR("Got ENOMSG: %s:%d", __FILE__, __LINE__);
@@ -213,34 +253,12 @@ net_result LinuxNetworkInterface::nrecv
 			continue;
 		}
 
-		packet_is_event = (payload[0] & 0x8) == 0;
-		if( active_sd == sd_general && logged_rx_general_debug < 12 ) {
-			uint8_t tspec = (payload[0] >> 4) & 0x0F;
-			uint8_t msg = payload[0] & 0x0F;
-			uint16_t seq = PLAT_ntohs(*((uint16_t *)(payload + PTP_COMMON_HDR_SEQUENCE_ID(PTP_COMMON_HDR_OFFSET))));
-			char remote_str[32];
-			snprintf(remote_str, sizeof(remote_str),
-				 "%02x:%02x:%02x:%02x:%02x:%02x",
-				 remote.sll_addr[0], remote.sll_addr[1], remote.sll_addr[2],
-				 remote.sll_addr[3], remote.sll_addr[4], remote.sll_addr[5]);
-			GPTP_LOG_INFO(
-				"RX general: from=%s proto=0x%04x vlan=%d tspec=%u msg=%u seq=%u len=%d first=%02x %02x %02x %02x",
-				remote_str, rx_proto, vlan_tagged ? 1 : 0, tspec, msg, seq, err,
-				payload[0], payload[1], payload[2], payload[3]);
-			++logged_rx_general_debug;
-		}
-		if( (active_sd == sd_event && !packet_is_event) ||
-		    (active_sd == sd_general && packet_is_event) ) {
-			continue;
-		}
-
 		*addr = LinkLayerAddress( remote.sll_addr );
 		break;
 	}
 
 	gtimestamper = dynamic_cast<LinuxTimestamperGeneric *>(timestamper);
-	if( active_sd == sd_event && err > 0 && !(payload[0] & 0x8) &&
-	    gtimestamper != NULL ) {
+	if( err > 0 && !(payload[0] & 0x8) && gtimestamper != NULL ) {
 		uint16_t rx_sequence_id =
 			PLAT_ntohs(*((uint16_t *)(payload + PTP_COMMON_HDR_SEQUENCE_ID(PTP_COMMON_HDR_OFFSET))));
 		MessageType rx_message_type =
@@ -495,123 +513,123 @@ int LinuxTimestamperGeneric::HWTimestamper_txtimestamp
 	struct iovec sgentry;
 	PTPMessageId reflectedMessageId;
 	uint8_t reflected_bytes[ETHER_HDR_LEN + 4 + PTP_COMMON_HDR_LENGTH];
-	uint16_t sequenceId;
-	bool matched_reflected_id = false;
-	bool have_timestamp = false;
 	union {
 		char control_data[CMSG_SPACE(256)];
 		struct cmsghdr cm;
 	} control;
 
-	if( sd == -1 ) return -1;
-	memset( &msg, 0, sizeof( msg ));
-	memset( reflected_bytes, 0, sizeof( reflected_bytes ));
-
-	msg.msg_iov = &sgentry;
-	msg.msg_iovlen = 1;
-
-	sgentry.iov_base = reflected_bytes;
-	sgentry.iov_len = sizeof(reflected_bytes);
-
-	memset( &remote, 0, sizeof(remote));
-	msg.msg_name = (caddr_t) &remote;
-	msg.msg_namelen = sizeof( remote );
-	msg.msg_control = &control;
-	msg.msg_controllen = sizeof(control);
-
-	err = recvmsg( sd, &msg, MSG_ERRQUEUE );
-	if( err == -1 ) {
-		if( errno == EAGAIN ) {
-			ret = GPTP_EC_EAGAIN;
-			goto done;
+	if( popTXTimestamp( messageId, &timestamp )) {
+		static unsigned int logged_tx_cache_hit_debug = 0;
+		if( logged_tx_cache_hit_debug < 16 ) {
+			GPTP_LOG_INFO(
+				"Recovered cached TX timestamp for msgType=%u seq=%u ts=%hu,%u,%u cache_after=%zu",
+				messageId.getMessageType(), messageId.getSequenceId(),
+				timestamp.seconds_ms, timestamp.seconds_ls,
+				timestamp.nanoseconds, txTimestampList.size());
+			++logged_tx_cache_hit_debug;
 		}
-		else {
-			ret = GPTP_EC_FAILURE;
-			goto done;
-		}
+		ret = GPTP_EC_SUCCESS;
+		goto done;
 	}
-	{
-		static unsigned int logged_tx_parse_debug = 0;
-		const size_t candidate_offsets[] = { 0, 4, ETHER_HDR_LEN, ETHER_HDR_LEN + 4 };
-		for( unsigned int i = 0; i < sizeof(candidate_offsets) / sizeof(candidate_offsets[0]); ++i ) {
-			size_t candidate = candidate_offsets[i];
-			uint8_t *gptpCommonHeader;
-			if( candidate + PTP_COMMON_HDR_LENGTH > (size_t) err ) {
-				continue;
+
+	if( sd == -1 ) return -1;
+	for( ;; ) {
+		bool have_reflected_id = false;
+		bool have_timestamp = false;
+		Timestamp queued_timestamp;
+		size_t matched_offset = 0;
+
+		memset( &msg, 0, sizeof( msg ));
+		memset( reflected_bytes, 0, sizeof( reflected_bytes ));
+
+		msg.msg_iov = &sgentry;
+		msg.msg_iovlen = 1;
+
+		sgentry.iov_base = reflected_bytes;
+		sgentry.iov_len = sizeof(reflected_bytes);
+
+		memset( &remote, 0, sizeof(remote));
+		msg.msg_name = (caddr_t) &remote;
+		msg.msg_namelen = sizeof( remote );
+		msg.msg_control = &control;
+		msg.msg_controllen = sizeof(control);
+
+		err = recvmsg( sd, &msg, MSG_ERRQUEUE );
+		if( err == -1 ) {
+			if( errno == EAGAIN ) {
+				ret = GPTP_EC_EAGAIN;
+				goto done;
 			}
-			gptpCommonHeader = reflected_bytes + candidate;
-			sequenceId = PLAT_ntohs(
-				*((uint16_t *)(PTP_COMMON_HDR_SEQUENCE_ID(gptpCommonHeader))));
-			reflectedMessageId.setSequenceId(sequenceId);
-			reflectedMessageId.setMessageType(
-				(MessageType)(*PTP_COMMON_HDR_TRANSSPEC_MSGTYPE(
-					gptpCommonHeader) & 0xF));
-			if( messageId == reflectedMessageId ) {
-				matched_reflected_id = true;
+			else {
+				ret = GPTP_EC_FAILURE;
+				goto done;
+			}
+		}
+
+		have_reflected_id = parse_reflected_tx_message_id(
+			reflected_bytes, (size_t) err, &reflectedMessageId, &matched_offset );
+		if( !have_reflected_id ) {
+			static unsigned int logged_tx_parse_debug = 0;
+			if( logged_tx_parse_debug < 8 ) {
+				GPTP_LOG_WARNING(
+					"TX timestamp parse failed: want msgType=%u seq=%u len=%d raw=%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+					messageId.getMessageType(), messageId.getSequenceId(), err,
+					reflected_bytes[0], reflected_bytes[1], reflected_bytes[2], reflected_bytes[3],
+					reflected_bytes[4], reflected_bytes[5], reflected_bytes[6], reflected_bytes[7],
+					reflected_bytes[8], reflected_bytes[9], reflected_bytes[10], reflected_bytes[11],
+					reflected_bytes[12], reflected_bytes[13], reflected_bytes[14], reflected_bytes[15]);
+				++logged_tx_parse_debug;
+			}
+			continue;
+		}
+
+		// Retrieve the timestamp
+		cmsg = CMSG_FIRSTHDR(&msg);
+		while( cmsg != NULL ) {
+			if( cmsg->cmsg_level == SOL_SOCKET &&
+				cmsg->cmsg_type == SO_TIMESTAMPING ) {
+				struct timespec *ts_device, *ts_system;
+				Timestamp device, system;
+				ts_system = ((struct timespec *) CMSG_DATA(cmsg)) + 1;
+				system = tsToTimestamp( ts_system );
+				ts_device = ts_system + 1; device = tsToTimestamp( ts_device );
+				system._version = version;
+				device._version = version;
+				queued_timestamp = device;
+				have_timestamp = true;
 				break;
 			}
-			if( logged_tx_parse_debug < 4 ) {
+			cmsg = CMSG_NXTHDR(&msg,cmsg);
+		}
+
+		if( !have_timestamp ) {
+			GPTP_LOG_ERROR("Received a error message, but didn't find a valid timestamp");
+			continue;
+		}
+
+		if( reflectedMessageId == messageId ) {
+			timestamp = queued_timestamp;
+			ret = GPTP_EC_SUCCESS;
+			goto done;
+		}
+
+		pushTXTimestamp( reflectedMessageId, &queued_timestamp );
+		{
+			static unsigned int logged_tx_queue_debug = 0;
+			if( logged_tx_queue_debug < 16 ) {
 				GPTP_LOG_INFO(
-					"TX timestamp parse miss: want msgType=%u seq=%u candidate_off=%zu got msgType=%u seq=%u",
+					"Queued TX timestamp while waiting for msgType=%u seq=%u: got msgType=%u seq=%u off=%zu ts=%hu,%u,%u cache=%zu",
 					messageId.getMessageType(), messageId.getSequenceId(),
-					candidate, reflectedMessageId.getMessageType(),
-					reflectedMessageId.getSequenceId());
+					reflectedMessageId.getMessageType(), reflectedMessageId.getSequenceId(),
+					matched_offset,
+					queued_timestamp.seconds_ms, queued_timestamp.seconds_ls,
+					queued_timestamp.nanoseconds, txTimestampList.size());
+				++logged_tx_queue_debug;
 			}
-		}
-		if( logged_tx_parse_debug < 4 ) {
-			GPTP_LOG_INFO(
-				"TX timestamp raw bytes: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
-				reflected_bytes[0], reflected_bytes[1], reflected_bytes[2], reflected_bytes[3],
-				reflected_bytes[4], reflected_bytes[5], reflected_bytes[6], reflected_bytes[7],
-				reflected_bytes[8], reflected_bytes[9], reflected_bytes[10], reflected_bytes[11],
-				reflected_bytes[12], reflected_bytes[13], reflected_bytes[14], reflected_bytes[15]);
-			++logged_tx_parse_debug;
-		}
-		if( !matched_reflected_id && logged_tx_parse_debug < 4 ) {
-			GPTP_LOG_INFO("TX timestamp will rely on serialized fallback for msgType=%u seq=%u",
-					 messageId.getMessageType(), messageId.getSequenceId());
-		}
-	}
-
-	// Retrieve the timestamp
-	cmsg = CMSG_FIRSTHDR(&msg);
-	while( cmsg != NULL ) {
-		if( cmsg->cmsg_level == SOL_SOCKET &&
-			cmsg->cmsg_type == SO_TIMESTAMPING ) {
-			struct timespec *ts_device, *ts_system;
-			Timestamp device, system;
-			ts_system = ((struct timespec *) CMSG_DATA(cmsg)) + 1;
-			system = tsToTimestamp( ts_system );
-			ts_device = ts_system + 1; device = tsToTimestamp( ts_device );
-			system._version = version;
-			device._version = version;
-			timestamp = device;
-			have_timestamp = true;
-			ret = 0;
-			break;
-		}
-		cmsg = CMSG_NXTHDR(&msg,cmsg);
-	}
-
-	if( !have_timestamp ) {
-		GPTP_LOG_ERROR("Received a error message, but didn't find a valid timestamp");
-		ret = GPTP_EC_EAGAIN;
-	} else if( !matched_reflected_id ) {
-		static unsigned int logged_tx_fallback_debug = 0;
-		if( logged_tx_fallback_debug < 4 ) {
-			GPTP_LOG_INFO(
-				"Using TX timestamp without reflected message-id match: msgType=%u seq=%u ts=%hu,%u,%u",
-				messageId.getMessageType(), messageId.getSequenceId(),
-				timestamp.seconds_ms, timestamp.seconds_ls, timestamp.nanoseconds);
-			++logged_tx_fallback_debug;
 		}
 	}
 
  done:
-	if( ret == 0 || last ) {
-		net_lock->unlock();
-	}
-
 	return ret;
 }
 

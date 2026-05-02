@@ -124,8 +124,12 @@
 #define PTP_PTPTIMESCALE_BYTE 1	/*!< PTPTIMESCALE byte offset on flags field*/
 #define PTP_PTPTIMESCALE_BIT 3	/*!< PTPTIMESCAPE bit offset on PTPTIMESCALE byte*/
 
+/* Experimental wider TX timestamp wait budget for deferred-completion NICs
+ * such as igc/i226. The current daemon_cl path assumes relatively prompt
+ * error-queue delivery, which is not holding on this host.
+ */
 #define TX_TIMEOUT_BASE 1000 	/*!< Timeout base in microseconds */
-#define TX_TIMEOUT_ITER 6		/*!< Number of timeout iteractions for sending/receiving messages*/
+#define TX_TIMEOUT_ITER 13		/*!< Number of timeout iteractions for sending/receiving messages*/
 
 /**
  * @brief Enumeration message type. IEEE 1588-2008 Clause 13.3.2.2

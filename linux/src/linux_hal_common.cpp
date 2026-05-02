@@ -62,6 +62,8 @@
 #include <linux/sockios.h>
 #include <gptp_cfg.hpp>
 
+/* Use SO_PRIORITY for mqprio steering without changing the on-wire frame. */
+static const bool g_gptp_tx_socket_priority = true;
 static const bool g_gptp_tx_priority_tag = false;
 static const uint16_t g_gptp_tx_vid = 0;
 static const uint8_t g_gptp_tx_pcp = 7;
@@ -91,6 +93,7 @@ net_result LinuxNetworkInterface::send
 ( LinkLayerAddress *addr, uint16_t etherType, uint8_t *payload, size_t length, bool timestamp ) {
 	sockaddr_ll remote;
 	int err;
+	bool locked_event_socket = false;
 	static unsigned int logged_tx_debug = 0;
 	if( g_gptp_tx_priority_tag && length > 1500 ) {
 		GPTP_LOG_ERROR("Failed to send: payload too large for VLAN-tagged gPTP (%zu)", length);
@@ -119,7 +122,11 @@ net_result LinuxNetworkInterface::send
 
 	if( timestamp ) {
 #ifndef ARCH_INTELCE
-		net_lock.lock();
+		if( !net_lock.lock() ) {
+			GPTP_LOG_ERROR("Failed to lock event socket for send");
+			return net_fatal;
+		}
+		locked_event_socket = true;
 #endif
 		if( g_gptp_tx_priority_tag ) {
 			/* Priority-tagged frame (VID 0) with encapsulated original EtherType. */
@@ -149,6 +156,10 @@ net_result LinuxNetworkInterface::send
 			remote.sll_protocol = PLAT_htons(etherType);
 			err = sendto(sd_general, payload, length, 0, (sockaddr *)&remote, sizeof(remote));
 		}
+	}
+	if( locked_event_socket && !net_lock.unlock() ) {
+		GPTP_LOG_ERROR("Failed to unlock event socket after send");
+		return net_fatal;
 	}
 	if( err == -1 ) {
 		GPTP_LOG_ERROR( "Failed to send: %s(%d)", strerror(errno), errno );
@@ -1111,7 +1122,7 @@ bool LinuxNetworkInterfaceFactory::createInterface
 			( "failed to open event socket: %s ", strerror(errno));
 		goto exit_error;
 	}
-	if( g_gptp_tx_priority_tag ) {
+	if( g_gptp_tx_socket_priority ) {
 		int sk_prio = g_gptp_tx_pcp;
 		if( setsockopt(net_iface_l->sd_event, SOL_SOCKET, SO_PRIORITY, &sk_prio, sizeof(sk_prio)) == -1 ) {
 			GPTP_LOG_WARNING("Failed to set SO_PRIORITY on event socket: %s", strerror(errno));
@@ -1120,6 +1131,15 @@ bool LinuxNetworkInterfaceFactory::createInterface
 			GPTP_LOG_WARNING("Failed to set SO_PRIORITY on general socket: %s", strerror(errno));
 		}
 	}
+#ifdef PACKET_IGNORE_OUTGOING
+	{
+		int ignore_outgoing = 1;
+		if( setsockopt(net_iface_l->sd_event, SOL_PACKET, PACKET_IGNORE_OUTGOING,
+			       &ignore_outgoing, sizeof(ignore_outgoing)) == -1 ) {
+			GPTP_LOG_WARNING("Failed to ignore outgoing traffic on event socket: %s", strerror(errno));
+		}
+	}
+#endif
 
 	memset( &device, 0, sizeof(device));
 	ifname->toString( device.ifr_name, IFNAMSIZ - 1 );
@@ -1154,36 +1174,15 @@ bool LinuxNetworkInterfaceFactory::createInterface
 			  ifindex );
 		goto exit_error;
 	}
-	err = setsockopt
-		( net_iface_l->sd_general, SOL_PACKET, PACKET_ADD_MEMBERSHIP,
-		  &mr_8021as, sizeof( mr_8021as ));
-	if( err == -1 ) {
-		GPTP_LOG_ERROR
-			( "Unable to add PTP multicast addresses to general port id: %u",
-			  ifindex );
-		goto exit_error;
-	}
-
 	memset( &ifsock_addr, 0, sizeof( ifsock_addr ));
 	ifsock_addr.sll_family = AF_PACKET;
 	ifsock_addr.sll_ifindex = ifindex;
-	/* Some Linux drivers only deliver RX timestamping reliably for L2 PTP
-	 * when the packet socket is bound to ETH_P_ALL rather than filtered to
-	 * the 0x88f7 EtherType.
-	 */
-	ifsock_addr.sll_protocol = PLAT_htons( ETH_P_ALL );
+	ifsock_addr.sll_protocol = PLAT_htons( PTP_ETHERTYPE );
 	err = bind
 		( net_iface_l->sd_event, (sockaddr *) &ifsock_addr,
 		  sizeof( ifsock_addr ));
 	if( err == -1 ) {
 		GPTP_LOG_ERROR( "Call to bind() failed: %s", strerror(errno) );
-		goto exit_error;
-	}
-	err = bind
-		( net_iface_l->sd_general, (sockaddr *) &ifsock_addr,
-		  sizeof( ifsock_addr ));
-	if( err == -1 ) {
-		GPTP_LOG_ERROR( "Call to general bind() failed: %s", strerror(errno) );
 		goto exit_error;
 	}
 
@@ -1197,6 +1196,9 @@ bool LinuxNetworkInterfaceFactory::createInterface
 		( ifindex, net_iface_l->sd_event, &net_iface_l->net_lock )) {
 		GPTP_LOG_ERROR( "post_init failed\n" );
 		goto exit_error;
+	}
+	if( g_gptp_tx_socket_priority ) {
+		GPTP_LOG_INFO("gPTP socket priority enabled (SO_PRIORITY=%u)", g_gptp_tx_pcp);
 	}
 	if( g_gptp_tx_priority_tag ) {
 		GPTP_LOG_INFO("gPTP TX priority tagging enabled (PCP=%u, VID=%u)", g_gptp_tx_pcp, g_gptp_tx_vid);

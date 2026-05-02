@@ -58,6 +58,13 @@ private:
 		PTPMessageId messageId;
 		Timestamp timestamp;
 	};
+	struct TxTimestampRecord {
+		PTPMessageId messageId;
+		Timestamp timestamp;
+	};
+	enum {
+		MAX_TX_TIMESTAMP_RECORDS = 32
+	};
 
 	int sd;
 	int phc_fd;
@@ -66,6 +73,7 @@ private:
 	LinuxTimestamperGenericPrivate_t _private;
 	bool cross_stamp_good;
 	std::list<RxTimestampRecord> rxTimestampList;
+	std::list<TxTimestampRecord> txTimestampList;
 	LinuxNetworkInterfaceList iface_list;
 #ifdef PTP_HW_CROSSTSTAMP
 	bool precise_timestamp_enabled;
@@ -129,6 +137,38 @@ public:
 
 	size_t getQueuedRxTimestampCount() const {
 		return rxTimestampList.size();
+	}
+
+	void pushTXTimestamp( PTPMessageId messageId, Timestamp *tstamp ) {
+		std::list<TxTimestampRecord>::iterator it;
+		TxTimestampRecord record;
+
+		tstamp->_version = version;
+		for( it = txTimestampList.begin(); it != txTimestampList.end(); ++it ) {
+			if( it->messageId == messageId ) {
+				txTimestampList.erase( it );
+				break;
+			}
+		}
+
+		record.messageId = messageId;
+		record.timestamp = *tstamp;
+		txTimestampList.push_front( record );
+		while( txTimestampList.size() > MAX_TX_TIMESTAMP_RECORDS ) {
+			txTimestampList.pop_back();
+		}
+	}
+
+	bool popTXTimestamp( PTPMessageId messageId, Timestamp *tstamp ) {
+		std::list<TxTimestampRecord>::iterator it;
+		for( it = txTimestampList.begin(); it != txTimestampList.end(); ++it ) {
+			if( it->messageId == messageId ) {
+				*tstamp = it->timestamp;
+				txTimestampList.erase( it );
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
