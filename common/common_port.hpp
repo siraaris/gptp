@@ -1089,6 +1089,9 @@ public:
 	{
 		GPTP_LOG_VERBOSE("Stop listening thread");
 		setListeningThreadRunning(false);
+		if( net_iface != NULL ) {
+			net_iface->interrupt();
+		}
 	}
 
 	/**

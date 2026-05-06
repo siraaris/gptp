@@ -336,6 +336,11 @@ class OSNetworkInterface {
 	 virtual unsigned getPayloadOffset() = 0;
 
 	 /**
+	  * @brief Interrupt any blocking receive operation during shutdown.
+	  */
+	 virtual void interrupt() {}
+
+	 /**
 	  * @brief Native support for polimorphic destruction
 	  */
 	 virtual ~OSNetworkInterface() = 0;

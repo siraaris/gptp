@@ -217,6 +217,11 @@ public:
 	virtual void watchNetLink( CommonPort *pPort );
 
 	/**
+	 * @brief Interrupt blocking socket operations during shutdown.
+	 */
+	virtual void interrupt() override;
+
+	/**
 	 * @brief Gets the payload offset
 	 * @return payload offset
 	 */

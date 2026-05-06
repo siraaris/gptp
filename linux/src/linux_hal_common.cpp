@@ -89,6 +89,23 @@ LinuxNetworkInterface::~LinuxNetworkInterface() {
 	if ( sd_general != -1 ) close( sd_general );
 }
 
+void LinuxNetworkInterface::interrupt() {
+	int event_socket = sd_event;
+	int general_socket = sd_general;
+
+	sd_event = -1;
+	sd_general = -1;
+
+	if ( event_socket != -1 ) {
+		shutdown( event_socket, SHUT_RDWR );
+		close( event_socket );
+	}
+	if ( general_socket != -1 ) {
+		shutdown( general_socket, SHUT_RDWR );
+		close( general_socket );
+	}
+}
+
 net_result LinuxNetworkInterface::send
 ( LinkLayerAddress *addr, uint16_t etherType, uint8_t *payload, size_t length, bool timestamp ) {
 	sockaddr_ll remote;
